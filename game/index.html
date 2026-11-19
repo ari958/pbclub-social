@@ -1,0 +1,1024 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PB Club AI</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="PB Club AI: the pickleball video game. You don't need to go anywhere to play anymore. You're welcome.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=Outfit:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one full-screen canvas court, a navy scoreboard band on top, a ticker on the bottom, overlays for title / loading / results. Single dark look on purpose (it's the club at night). */
+:root {
+  --navy: #1a2738;
+  --navy-2: #233249;
+  --cream: #f3f4dc;
+  --khaki: #a09d72;
+  --court: #5266ae;
+  --ball: #dcef3c;
+  --bot: #4be3ff;
+  --ink: #0e1520;
+  --display: "Barlow Condensed", "Arial Narrow", "Helvetica Neue", sans-serif;
+  --body: "Outfit", "Helvetica Neue", Arial, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; }
+[hidden] { display: none !important; }
+body {
+  background: var(--navy);
+  color: var(--cream);
+  font-family: var(--body);
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#app { position: relative; width: 100%; height: 100%; overflow: hidden; touch-action: manipulation; }
+#game { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: pointer; }
+
+/* Scoreboard */
+.hud {
+  position: absolute; top: 0; left: 0; right: 0;
+  padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; justify-content: center; pointer-events: none;
+}
+.board {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 14px;
+  background: rgba(26, 39, 56, 0.92); border: 1px solid rgba(243, 244, 220, 0.14);
+  border-radius: 14px; padding: 8px 16px; min-width: 0; max-width: 560px; width: 100%;
+  backdrop-filter: blur(6px);
+}
+.team { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.team.them { justify-content: flex-end; text-align: right; }
+.names { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--khaki); line-height: 1.25; min-width: 0; }
+.names b { color: var(--cream); font-weight: 600; display: block; font-size: 12px; }
+.pts { font-family: var(--display); font-weight: 800; font-size: 40px; line-height: 1; font-variant-numeric: tabular-nums; min-width: 1.1ch; text-align: center; }
+.serve-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ball); box-shadow: 0 0 8px var(--ball); visibility: hidden; flex: none; }
+.serve-dot.on { visibility: visible; }
+.mid { font-family: var(--display); font-weight: 700; font-size: 12px; letter-spacing: 0.14em; color: var(--khaki); text-align: center; line-height: 1.2; }
+.board[hidden] { display: none; }
+
+.mute {
+  position: absolute; pointer-events: auto;
+  top: calc(12px + env(safe-area-inset-top, 0px)); right: max(12px, env(safe-area-inset-right, 0px));
+  width: 38px; height: 38px; border-radius: 50%; border: 1px solid rgba(243,244,220,0.25);
+  background: rgba(26,39,56,0.85); color: var(--cream); font: 600 11px var(--body); letter-spacing: 0.04em; cursor: pointer;
+}
+@media (max-width: 640px) {
+  .hud { padding-right: max(58px, env(safe-area-inset-right, 0px)); }
+  .board { padding: 6px 10px; gap: 8px; }
+  .pts { font-size: 32px; }
+  .names { font-size: 9px; } .names b { font-size: 10px; }
+  .mid { font-size: 10px; }
+}
+
+/* Caption + hint */
+.caption {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+  width: min(92%, 620px); text-align: center; pointer-events: none;
+  font-size: 15px; font-weight: 500; line-height: 1.35; text-wrap: balance;
+  background: rgba(26,39,56,0.88); border-radius: 12px; padding: 10px 16px;
+  border: 1px solid rgba(243,244,220,0.12); transition: opacity .3s;
+}
+.caption:empty { opacity: 0; }
+.caption .tag { color: var(--khaki); font-weight: 700; letter-spacing: .08em; font-size: 11px; display: block; margin-bottom: 2px; text-transform: uppercase; }
+.hint {
+  position: absolute; left: 50%; transform: translateX(-50%); pointer-events: none;
+  top: calc(84px + env(safe-area-inset-top, 0px));
+  font-family: var(--display); font-weight: 800; font-size: 20px; letter-spacing: 0.08em;
+  color: var(--ink); background: var(--ball); padding: 6px 14px; border-radius: 999px; white-space: nowrap;
+  animation: pulse 1.1s ease-in-out infinite;
+}
+@keyframes pulse { 50% { transform: translateX(-50%) scale(1.06); } }
+
+/* Ticker */
+.ticker {
+  position: absolute; left: 0; right: 0; bottom: 0; overflow: hidden; pointer-events: none;
+  background: var(--khaki); color: var(--navy);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.ticker-track { display: inline-flex; white-space: nowrap; animation: tick 48s linear infinite; padding-block: 9px; }
+.ticker-track span { font-family: var(--display); font-weight: 800; font-size: 16px; letter-spacing: 0.1em; padding-right: 48px; }
+@keyframes tick { to { transform: translateX(-50%); } }
+
+/* Overlays */
+.overlay {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding-block: calc(24px + env(safe-area-inset-top, 0px)) calc(60px + env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: linear-gradient(180deg, rgba(14,21,32,0.55), rgba(14,21,32,0.82));
+  overflow-y: auto;
+}
+.card {
+  width: 100%; max-width: 520px; display: flex; flex-direction: column; align-items: flex-start; gap: 16px;
+  background: rgba(26,39,56,0.94); border: 1px solid rgba(243,244,220,0.14); border-radius: 22px;
+  padding: 28px; box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+}
+.pill {
+  background: var(--khaki); color: var(--navy); border-radius: 999px; padding: 6px 14px;
+  font-weight: 700; font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+}
+.logo-row { display: flex; align-items: flex-end; gap: 14px; }
+.logo-row img { width: 92px; height: auto; }
+.logo-row .ai { font-family: var(--display); font-weight: 800; font-size: 76px; line-height: .78; color: var(--ball); letter-spacing: -0.01em; }
+h1, h2 { font-family: var(--display); font-weight: 800; text-transform: uppercase; letter-spacing: 0.01em; line-height: 0.92; margin: 0; text-wrap: balance; }
+h1 { font-size: 46px; }
+h2 { font-size: 48px; }
+.card p { margin: 0; font-size: 17px; line-height: 1.45; max-width: 46ch; color: rgba(243,244,220,0.92); }
+.card p.fine { font-size: 13px; color: var(--khaki); letter-spacing: 0.02em; }
+.btn {
+  font: 700 18px var(--body); letter-spacing: 0.02em; color: var(--navy); background: var(--cream);
+  border: 0; border-radius: 999px; padding: 14px 30px; cursor: pointer; transition: transform .15s, background .15s;
+}
+.btn:hover { background: #fff; transform: translateY(-1px); }
+.btn:focus-visible, .mute:focus-visible { outline: 3px solid var(--ball); outline-offset: 3px; }
+.stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; width: 100%; }
+.stat { background: rgba(243,244,220,0.06); border-radius: 12px; padding: 10px 12px; min-width: 0; }
+.stat .k { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--khaki); }
+.stat .v { font-family: var(--display); font-weight: 800; font-size: 32px; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.stat .n { font-size: 11px; color: rgba(243,244,220,0.6); }
+.stat.wide { grid-column: 1 / -1; }
+.cta { border-top: 1px solid rgba(243,244,220,0.14); padding-top: 14px; width: 100%; display: flex; flex-direction: column; gap: 6px; }
+.cta strong { color: var(--ball); font-family: var(--display); font-size: 22px; letter-spacing: 0.04em; text-transform: uppercase; }
+
+/* Loading */
+.loader { width: 100%; height: 10px; background: rgba(243,244,220,0.1); border-radius: 99px; overflow: hidden; }
+.loader i { display: block; height: 100%; width: 0; background: var(--ball); border-radius: 99px; transition: width .35s ease; }
+.load-msg { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 14px; color: var(--cream); min-height: 2.6em; }
+
+@media (max-width: 480px) {
+  .card { padding: 22px; gap: 14px; }
+  h1 { font-size: 38px; } h2 { font-size: 40px; }
+  .logo-row .ai { font-size: 60px; } .logo-row img { width: 74px; }
+  .card p { font-size: 15px; }
+  .caption { font-size: 13px; }
+  .hint { font-size: 16px; top: calc(70px + env(safe-area-inset-top, 0px)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ticker-track, .hint { animation: none; }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <canvas id="game" aria-label="PB Club AI pickleball court"></canvas>
+
+  <div class="hud">
+    <div class="board" id="board" hidden>
+      <div class="team us">
+        <span class="serve-dot" id="dot0"></span>
+        <span class="pts" id="s0">0</span>
+        <span class="names"><b>You</b>+ Auto-Partner</span>
+      </div>
+      <div class="mid">FIRST<br>TO 7</div>
+      <div class="team them">
+        <span class="names"><b>Dink-9000</b>+ Lob-E</span>
+        <span class="pts" id="s1">0</span>
+        <span class="serve-dot" id="dot1"></span>
+      </div>
+    </div>
+  </div>
+  <button class="mute" id="mute" type="button" aria-label="Mute sound">SND</button>
+
+  <div class="hint" id="hint" hidden>TAP TO SWING</div>
+  <div class="caption" id="caption"></div>
+
+  <div class="ticker" aria-hidden="true"><div class="ticker-track" id="ticker"></div></div>
+
+  <section class="overlay" id="title">
+    <div class="card">
+      <span class="pill">Black Friday drop · 11.27</span>
+      <div class="logo-row"><img src="data:image/png;base64,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" alt="PB Club"><span class="ai">AI</span></div>
+      <h1>The pickleball video game</h1>
+      <p>Pickleball is now powered by AI, like everything else. No court. No paddle. No drive to Jersey City. You don't need to go anywhere to play anymore. You're welcome.</p>
+      <button class="btn" id="play" type="button">Play now</button>
+      <p class="fine">Doubles · 1 player · First to 7 · Tap or press Space to swing. The AI moves your feet.</p>
+    </div>
+  </section>
+
+  <section class="overlay" id="loading" hidden>
+    <div class="card">
+      <span class="pill">Booting PB Club AI</span>
+      <div class="loader"><i id="bar"></i></div>
+      <div class="load-msg" id="loadmsg">Initializing…</div>
+    </div>
+  </section>
+
+  <section class="overlay" id="over" hidden>
+    <div class="card">
+      <span class="pill" id="overpill">Final</span>
+      <h2 id="overh">You beat the robots</h2>
+      <p id="overp">DINK-9000 and LOB-E have filed an appeal.</p>
+      <div class="stats">
+        <div class="stat"><div class="k">Final score</div><div class="v" id="st-score">7–5</div></div>
+        <div class="stat"><div class="k">AI-estimated DUPR</div><div class="v" id="st-dupr">4.21</div><div class="n">Not real. Do not put on profile.</div></div>
+        <div class="stat"><div class="k">Perfect swings</div><div class="v" id="st-perfect">0</div></div>
+        <div class="stat"><div class="k">Longest rally</div><div class="v" id="st-rally">0</div></div>
+        <div class="stat wide"><div class="k">Calories burned</div><div class="v">0</div><div class="n">You're welcome.</div></div>
+      </div>
+      <button class="btn" id="again" type="button">Play again</button>
+      <div class="cta">
+        <strong>Something big is coming Black Friday</strong>
+        <p class="fine">Miss your legs? Real courts are still open in Jersey City. Book in the PB Club app.</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+"use strict";
+// ---------- constants ----------
+const G = 24, R = 0.24, BZ = 0.62, BXY = 0.72, WIN_PTS = 7;
+const WIN_EARLY = 0.30, WIN_LATE = 0.22, PERFECT = 0.075;
+const SPEED = 0.92;
+const COL = {
+  ceil: "#12141b", ceilLine: "#1c1f29", wallTop: "#1b253b", wallBot: "#2a3759", base: "#3a4566",
+  floor: "#3c4a7a", court: "#5266ae", line: "#f2f3ea", panel: "#121318", cream: "#f3f4dc",
+  khaki: "#a09d72", navy: "#1a2738", ball: "#dcef3c", bot: "#4be3ff"
+};
+
+// ---------- DOM ----------
+const $ = id => document.getElementById(id);
+const C = $("game"), ctx = C.getContext("2d");
+const bg = document.createElement("canvas"), bgx = bg.getContext("2d");
+const logo = new Image(); logo.src = document.querySelector(".logo-row img").src;
+const TICKER = [
+  "Something big is coming Black Friday · 11.27",
+  "PB Club AI: why drive to the club when the club can drive to you",
+  "AI has removed volleys for your safety",
+  "No parking. No waitlist. No knees required.",
+  "Line calls now 51% accurate",
+  "You don't need to go anywhere to play anymore",
+  "You're welcome"
+];
+$("ticker").innerHTML = [...TICKER, ...TICKER].map(t => `<span>${t.toUpperCase()} ●</span>`).join("");
+
+// ---------- camera ----------
+let W = 0, H = 0, DPR = 1, F = 1, CY = 0;
+const CAM = { y: -40, z: 14, th: 0.3 };
+let cosT = 1, sinT = 0;
+function pv(y, z) { const dy = y - CAM.y, dz = z - CAM.z; return (dy * sinT + dz * cosT) / (dy * cosT - dz * sinT); }
+function dep(y, z) { const dy = y - CAM.y, dz = z - CAM.z; return dy * cosT - dz * sinT; }
+function proj(x, y, z) {
+  const dy = y - CAM.y, dz = z - CAM.z;
+  const d = dy * cosT - dz * sinT, v = dy * sinT + dz * cosT, s = F / d;
+  return { x: W / 2 + x * s, y: CY - v * s, s };
+}
+function resize() {
+  DPR = Math.min(2, window.devicePixelRatio || 1);
+  W = C.clientWidth; H = C.clientHeight;
+  C.width = Math.round(W * DPR); C.height = Math.round(H * DPR);
+  bg.width = C.width; bg.height = C.height;
+  const a = Math.max(0, Math.min(1, (H / W - 0.7) / 1.1)); // 0 landscape → 1 tall phone
+  CAM.y = -40 + 4 * a; CAM.z = 15 + 19 * a; CAM.th = 0.27 + 0.36 * a;
+  cosT = Math.cos(CAM.th); sinT = Math.sin(CAM.th);
+  const pNear = pv(-24, 0), pTop = pv(30, 15);
+  const topPad = 0.12 + 0.04 * a, botPad = 0.1;
+  const Fh = H * (1 - topPad - botPad) / (pTop - pNear);
+  const Fw = (W * 0.96) * dep(-22, 0) / 24;
+  F = Math.min(Fh, Fw);
+  CY = H * (1 - botPad) + F * pNear;
+  // if width-limited, center the scene vertically a little lower
+  if (Fw < Fh) CY = H * 0.86 + F * pNear;
+  drawBackground();
+}
+
+// ---------- drawing helpers ----------
+function poly(c, pts, fill) {
+  c.beginPath();
+  pts.forEach((p, i) => { const q = proj(p[0], p[1], p[2]); i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y); });
+  c.closePath(); c.fillStyle = fill; c.fill();
+}
+function line3(c, a, b, w, color) {
+  const p = proj(a[0], a[1], a[2]), q = proj(b[0], b[1], b[2]);
+  c.beginPath(); c.moveTo(p.x, p.y); c.lineTo(q.x, q.y);
+  c.lineWidth = Math.max(1, w * (p.s + q.s) / 2); c.strokeStyle = color; c.stroke();
+}
+function rrect(c, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+
+function drawCourt(c, cx) {
+  poly(c, [[cx - 10.6, -22.6, 0], [cx + 10.6, -22.6, 0], [cx + 10.6, 22.6, 0], [cx - 10.6, 22.6, 0]], COL.court);
+  const lw = 0.2, L = COL.line;
+  line3(c, [cx - 10, -22, 0], [cx - 10, 22, 0], lw, L);
+  line3(c, [cx + 10, -22, 0], [cx + 10, 22, 0], lw, L);
+  line3(c, [cx - 10, -22, 0], [cx + 10, -22, 0], lw, L);
+  line3(c, [cx - 10, 22, 0], [cx + 10, 22, 0], lw, L);
+  line3(c, [cx - 10, -7, 0], [cx + 10, -7, 0], lw, L);
+  line3(c, [cx - 10, 7, 0], [cx + 10, 7, 0], lw, L);
+  line3(c, [cx, 7, 0], [cx, 22, 0], lw, L);
+  line3(c, [cx, -7, 0], [cx, -22, 0], lw, L);
+}
+function netTop(x) { const t = Math.abs(x) / 11; return 2.85 + 0.15 * t * t; }
+function drawNet(c, cx, label) {
+  const n = 22, pts = [];
+  // mesh body
+  c.beginPath();
+  for (let i = 0; i <= n; i++) { const x = -11 + 22 * i / n; const q = proj(cx + x, 0, netTop(x)); i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y); pts.push(q); }
+  const br = proj(cx + 11, 0, 0.15), bl = proj(cx - 11, 0, 0.15);
+  c.lineTo(br.x, br.y); c.lineTo(bl.x, bl.y); c.closePath();
+  c.fillStyle = "rgba(8,9,12,0.42)"; c.fill();
+  // mesh lines
+  c.strokeStyle = "rgba(20,22,28,0.55)"; c.lineWidth = 1;
+  for (let x = -11; x <= 11; x += 0.75) { const a = proj(cx + x, 0, 0.15), b = proj(cx + x, 0, netTop(x)); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+  for (let z = 0.5; z < 2.9; z += 0.45) { const a = proj(cx - 11, 0, Math.min(z, netTop(11))), b = proj(cx + 11, 0, z); c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.stroke(); }
+  // bottom rail
+  const s0 = proj(cx, 0, 0).s;
+  c.fillStyle = "#14161c"; c.fillRect(bl.x, bl.y - 0.35 * s0, br.x - bl.x, 0.35 * s0);
+  // top tape
+  c.beginPath(); pts.forEach((q, i) => i ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y));
+  c.lineWidth = Math.max(2, 0.28 * s0); c.strokeStyle = "#f6f6f1"; c.stroke();
+  // center strap
+  const ct = proj(cx, 0, netTop(0)), cb = proj(cx, 0, 0.15);
+  c.beginPath(); c.moveTo(ct.x, ct.y); c.lineTo(cb.x, cb.y); c.lineWidth = Math.max(1.5, 0.18 * s0); c.strokeStyle = "#e9e9e2"; c.stroke();
+  // posts
+  for (const sx of [-11, 11]) {
+    const a = proj(cx + sx, 0, 0), b = proj(cx + sx, 0, 3.05);
+    c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(b.x, b.y); c.lineWidth = Math.max(2, 0.3 * s0); c.strokeStyle = "#0b0c10"; c.stroke();
+  }
+  if (label) {
+    const q = proj(cx - 5.5, 0, 0.18);
+    c.save(); c.fillStyle = COL.cream; c.font = `800 ${Math.max(7, 0.3 * s0)}px "Barlow Condensed", sans-serif`;
+    c.textBaseline = "bottom"; c.fillText("PB CLUB AI", q.x, q.y);
+    const q2 = proj(cx + 3.5, 0, 0.18); c.fillText("PB CLUB AI", q2.x, q2.y); c.restore();
+  }
+}
+function drawHexCluster(c, cx, cy, Rh, ring) {
+  const cells = [];
+  for (let q = -ring; q <= ring; q++) for (let r = -ring; r <= ring; r++) {
+    if (Math.abs(q) + Math.abs(r) + Math.abs(q + r) > ring * 2) continue;
+    cells.push([cx + Rh * 1.5 * q, cy + Rh * Math.sqrt(3) * (r + q / 2)]);
+  }
+  c.save();
+  c.lineJoin = "round"; c.shadowColor = "rgba(225,235,255,0.95)";
+  for (const [hx, hy] of cells) {
+    c.beginPath();
+    for (let k = 0; k <= 6; k++) {
+      const ang = Math.PI / 3 * k;
+      const q = proj(hx + Rh * Math.cos(ang), hy + Rh * Math.sin(ang), 19);
+      k ? c.lineTo(q.x, q.y) : c.moveTo(q.x, q.y);
+    }
+    const s = proj(hx, hy, 19).s;
+    c.shadowBlur = Math.max(4, 0.9 * s); c.lineWidth = Math.max(1.2, 0.26 * s); c.strokeStyle = "#f4f7ff"; c.stroke();
+  }
+  c.restore();
+}
+function drawPanels(c, cx, y) {
+  for (let x = cx - 12; x < cx + 12; x += 3) {
+    const a = proj(x + 0.08, y, 3.3), b = proj(x + 2.92, y, 0);
+    c.fillStyle = COL.panel; c.fillRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    c.strokeStyle = "#2b2e36"; c.lineWidth = 1; c.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+    if (logo.complete && logo.naturalWidth) {
+      const w = (b.y - a.y) * 0.5, h = w * logo.naturalHeight / logo.naturalWidth;
+      c.save(); c.translate((a.x + b.x) / 2, (a.y + b.y) / 2); c.rotate(-Math.PI / 2);
+      c.globalAlpha = 0.9; c.drawImage(logo, -w / 2, -h / 2, w, h); c.restore();
+    }
+  }
+}
+function drawBackground() {
+  const c = bgx; c.setTransform(DPR, 0, 0, DPR, 0, 0);
+  c.fillStyle = COL.ceil; c.fillRect(0, 0, W, H);
+  const ceil = CAM.z < 18, WH = ceil ? 19 : 60;
+  // ceiling corrugation + trusses
+  if (ceil) {
+  for (let y = -8; y < 36; y += 1.6) line3(c, [-90, y, 19.2], [90, y, 19.2], 0.35, COL.ceilLine);
+  for (const x of [-39, -13, 13, 39]) line3(c, [x, -10, 18.6], [x, 35, 18.6], 0.25, "#2a2e3a");
+  }
+  // far wall
+  const wt = proj(0, 35, WH), wb = proj(0, 35, 0);
+  const g = c.createLinearGradient(0, wt.y, 0, wb.y); g.addColorStop(0, COL.wallTop); g.addColorStop(1, COL.wallBot);
+  poly(c, [[-120, 35, WH], [120, 35, WH], [120, 35, 0], [-120, 35, 0]], g);
+  poly(c, [[-120, 35, 0.6], [120, 35, 0.6], [120, 35, 0], [-120, 35, 0]], COL.base);
+  // wall logo + court TV
+  if (logo.complete && logo.naturalWidth) {
+    const q = proj(0, 35, 8.6), w = 6.5 * q.s, h = w * logo.naturalHeight / logo.naturalWidth;
+    c.globalAlpha = 0.85; c.drawImage(logo, q.x - w / 2, q.y - h / 2, w, h); c.globalAlpha = 1;
+  }
+  const tv1 = proj(9, 35, 10.2), tv2 = proj(15.5, 35, 6.8);
+  c.fillStyle = "#0b1020"; rrect(c, tv1.x, tv1.y, tv2.x - tv1.x, tv2.y - tv1.y, 3); c.fill();
+  c.fillStyle = "#1f3f8f"; c.fillRect(tv1.x + 2, tv1.y + 2, tv2.x - tv1.x - 4, tv2.y - tv1.y - 4);
+  c.fillStyle = COL.cream; c.font = `600 ${Math.max(7, 1.05 * tv1.s)}px Outfit, sans-serif`; c.textBaseline = "middle";
+  c.fillText("Court ∞", tv1.x + 0.5 * tv1.s, tv1.y + (tv2.y - tv1.y) * 0.35);
+  c.fillStyle = COL.bot; c.fillText("AI only", tv1.x + 0.5 * tv1.s, tv1.y + (tv2.y - tv1.y) * 0.72);
+  // floor + courts
+  poly(c, [[-120, -30, 0], [120, -30, 0], [120, 35, 0], [-120, 35, 0]], COL.floor);
+  for (const cx of [-27, 27]) { drawCourt(c, cx); }
+  drawCourt(c, 0);
+  for (const cx of [-27, 0, 27]) drawPanels(c, cx, 28);
+  for (const cx of [-27, 27]) drawNet(c, cx, false);
+  // hex lights over each court
+  if (ceil) for (const cx of [-27, 0, 27]) { drawHexCluster(c, cx, 6, 2.1, 2); drawHexCluster(c, cx, 21, 2.1, 1); }
+  // light falloff vignette
+  const v = c.createRadialGradient(W / 2, H * 0.55, Math.min(W, H) * 0.3, W / 2, H * 0.55, Math.max(W, H) * 0.8);
+  v.addColorStop(0, "rgba(0,0,0,0)"); v.addColorStop(1, "rgba(5,8,14,0.45)");
+  c.fillStyle = v; c.fillRect(0, 0, W, H);
+}
+
+// ---------- players ----------
+function mkP(o) { return Object.assign({ x: 0, y: 0, swing: -1, walk: 0, moving: 0, homeY: 0 }, o); }
+const you = mkP({ key: "you", team: 0, lane: 1, name: "YOU", human: true, shirt: COL.cream, shirtInk: COL.navy, hair: "#3a2619", skin: "#e2b48f", paddle: COL.navy });
+const partner = mkP({ key: "partner", team: 0, lane: -1, name: "AUTO-PARTNER", shirt: COL.khaki, shirtInk: COL.navy, hair: "#caa25a", skin: "#c98f68", paddle: COL.navy });
+const dink = mkP({ key: "dink", team: 1, lane: -1, name: "DINK-9000", bot: true, shirt: "#262a33", shirtInk: COL.bot, paddle: "#e9edf3" });
+const lob = mkP({ key: "lob", team: 1, lane: 1, name: "LOB-E", bot: true, shirt: "#262a33", shirtInk: COL.bot, paddle: "#e9edf3" });
+const players = [you, partner, dink, lob];
+const teamOf = t => players.filter(p => p.team === t);
+const dirOf = t => (t === 0 ? 1 : -1); // team 0 hits toward +y
+
+function drawPlayer(p) {
+  const base = proj(p.x, p.y, 0), s = base.s;
+  const front = p.team === 1; // faces camera
+  const bob = p.moving ? Math.abs(Math.sin(p.walk)) * 0.18 : 0;
+  const X = dx => base.x + dx * s, Z = z => base.y - (z + bob) * s;
+  // shadow
+  ctx.fillStyle = "rgba(10,14,30,0.32)";
+  ctx.beginPath(); ctx.ellipse(base.x, base.y, 1.05 * s, 0.34 * s, 0, 0, Math.PI * 2); ctx.fill();
+  // legs
+  const legSwing = p.moving ? Math.sin(p.walk) * 0.35 : 0;
+  ctx.fillStyle = p.bot ? "#9aa3b2" : "#222630";
+  for (const sx of [-1, 1]) {
+    const lift = Math.max(0, sx * legSwing) * 0.6;
+    rrect(ctx, X(sx * 0.34 - 0.2), Z(1.65), 0.4 * s, (1.5 - lift) * s, 0.18 * s); ctx.fill();
+    ctx.fillStyle = "#f5f5f2"; ctx.beginPath(); ctx.ellipse(X(sx * 0.36), base.y - (lift + 0.1) * s, 0.3 * s, 0.15 * s, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = p.bot ? "#9aa3b2" : "#222630";
+  }
+  // torso
+  ctx.fillStyle = p.shirt; rrect(ctx, X(-0.78), Z(3.55), 1.56 * s, 2.05 * s, 0.6 * s); ctx.fill();
+  if (p.bot) { ctx.fillStyle = p.shirtInk; ctx.fillRect(X(-0.78), Z(2.6), 1.56 * s, 0.16 * s); }
+  if (!front && (p.human || p.key === "partner")) {
+    ctx.fillStyle = p.shirtInk; ctx.font = `800 ${0.9 * s}px "Barlow Condensed", sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(p.human ? "1" : "2", X(0), Z(2.7)); ctx.textAlign = "left";
+  }
+  // head
+  const hx = X(0), hy = Z(4.5), hr = 0.92 * s;
+  if (p.bot) {
+    const gr = ctx.createRadialGradient(hx - hr * 0.35, hy - hr * 0.4, hr * 0.1, hx, hy, hr);
+    gr.addColorStop(0, "#ffffff"); gr.addColorStop(1, "#aeb7c6");
+    ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.fill();
+    // antenna
+    ctx.strokeStyle = "#aeb7c6"; ctx.lineWidth = Math.max(1, 0.1 * s);
+    ctx.beginPath(); ctx.moveTo(hx, hy - hr); ctx.lineTo(hx, hy - hr - 0.45 * s); ctx.stroke();
+    const blink = (Math.sin(S.now * 5 + (p.lane > 0 ? 1 : 0)) > 0);
+    ctx.fillStyle = blink ? COL.bot : "#1d6c7c"; ctx.beginPath(); ctx.arc(hx, hy - hr - 0.5 * s, 0.15 * s, 0, Math.PI * 2); ctx.fill();
+    // visor
+    ctx.fillStyle = "#0d1220"; rrect(ctx, hx - hr * 0.78, hy - hr * 0.32, hr * 1.56, hr * 0.62, hr * 0.3); ctx.fill();
+    ctx.save(); ctx.shadowColor = COL.bot; ctx.shadowBlur = 0.5 * s; ctx.fillStyle = COL.bot;
+    const look = Math.max(-1, Math.min(1, ((S.ball ? S.ball.pos.x : 0) - p.x) / 10)) * hr * 0.12;
+    for (const ex of [-0.33, 0.33]) { ctx.beginPath(); ctx.arc(hx + ex * hr + look, hy - hr * 0.02, hr * 0.14, 0, Math.PI * 2); ctx.fill(); }
+    ctx.restore();
+  } else {
+    ctx.fillStyle = p.skin; ctx.beginPath(); ctx.arc(hx, hy, hr, 0, Math.PI * 2); ctx.fill();
+    // ears
+    ctx.beginPath(); ctx.arc(hx - hr * 0.98, hy + hr * 0.08, hr * 0.2, 0, Math.PI * 2); ctx.arc(hx + hr * 0.98, hy + hr * 0.08, hr * 0.2, 0, Math.PI * 2); ctx.fill();
+    // hair from behind
+    ctx.fillStyle = p.hair; ctx.beginPath(); ctx.arc(hx, hy - hr * 0.08, hr * 0.96, Math.PI * 0.92, Math.PI * 2.08); ctx.lineTo(hx + hr * 0.7, hy + hr * 0.55);
+    ctx.quadraticCurveTo(hx, hy + hr * 0.82, hx - hr * 0.7, hy + hr * 0.55); ctx.closePath(); ctx.fill();
+    if (p.human) { // visor cap band
+      ctx.fillStyle = COL.navy; ctx.fillRect(hx - hr * 0.96, hy - hr * 0.35, hr * 1.92, hr * 0.26);
+    }
+  }
+  // hands + paddle
+  const side = front ? -1 : 1; // paddle hand side on screen
+  const off = { x: -side * 1.05, z: 2.55 };
+  ctx.fillStyle = p.bot ? "#cfd6e0" : p.skin;
+  ctx.beginPath(); ctx.arc(X(off.x), Z(off.z), 0.27 * s, 0, Math.PI * 2); ctx.fill();
+  let a;
+  if (p.swing >= 0) {
+    const t = p.swing;
+    a = t < 0.28 ? 0.25 + (-1.0 - 0.25) * (t / 0.28) : t < 0.75 ? -1.0 + (2.5 + 1.0) * ((t - 0.28) / 0.47) : 2.5 + (0.25 - 2.5) * ((t - 0.75) / 0.25);
+  } else a = 0.25 + Math.sin(S.now * 2 + p.lane) * 0.05;
+  const sh = { x: side * 0.72, z: 3.15 };
+  const hxp = sh.x + side * Math.cos(a) * 0.95, hzp = sh.z + Math.sin(a) * 0.95;
+  const px = X(hxp), pz = Z(hzp);
+  const dxp = side * Math.cos(a), dzp = Math.sin(a);
+  // handle
+  ctx.strokeStyle = "#16181d"; ctx.lineWidth = Math.max(1.5, 0.18 * s); ctx.lineCap = "round";
+  ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + dxp * 0.5 * s, pz - dzp * 0.5 * s); ctx.stroke();
+  // face
+  ctx.save(); ctx.translate(px + dxp * 1.05 * s, pz - dzp * 1.05 * s); ctx.rotate(-Math.atan2(dzp, dxp));
+  ctx.fillStyle = p.paddle; ctx.beginPath(); ctx.ellipse(0, 0, 0.62 * s, 0.46 * s, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = p.bot ? COL.bot : COL.khaki; ctx.lineWidth = Math.max(1, 0.08 * s); ctx.stroke();
+  ctx.restore();
+  ctx.fillStyle = p.bot ? "#cfd6e0" : p.skin; ctx.beginPath(); ctx.arc(px, pz, 0.27 * s, 0, Math.PI * 2); ctx.fill();
+  // name tag
+  const ty = Z(5.9) - (p.bot ? 0.5 * s : 0);
+  ctx.font = `700 ${Math.max(9, Math.min(15, 0.55 * s))}px Outfit, sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+  if (p.human && !S.demo) {
+    const w = ctx.measureText("YOU").width + 14, h = Math.max(16, 0.75 * s);
+    ctx.fillStyle = COL.ball; rrect(ctx, hx - w / 2, ty - h - 6, w, h, h / 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(hx - 5, ty - 6); ctx.lineTo(hx + 5, ty - 6); ctx.lineTo(hx, ty); ctx.fill();
+    ctx.fillStyle = COL.navy; ctx.textBaseline = "middle"; ctx.fillText("YOU", hx, ty - 6 - h / 2);
+  } else {
+    ctx.fillStyle = p.bot ? "rgba(75,227,255,0.85)" : "rgba(243,244,220,0.75)";
+    ctx.fillText(S.demo && p.human ? "AUTO-YOU" : p.name, hx, ty);
+  }
+  ctx.textAlign = "left";
+}
+
+// ---------- ball path (analytic) ----------
+function buildPath(x, y, z, vx, vy, vz, netHit) {
+  const segs = [], events = [];
+  let t = 0;
+  if (netHit) {
+    const tn = -y / vy;
+    segs.push({ t0: 0, x, y, z, vx, vy, vz, dur: tn });
+    x += vx * tn; z = z + vz * tn - 0.5 * G * tn * tn; y = -Math.sign(vy) * 0.3;
+    t = tn; events.push({ t, type: "net" });
+    vx *= 0.1; vy = -vy * 0.05; vz = Math.min(0, vz - G * tn) * 0.15;
+  }
+  for (let i = 0; i < 6; i++) {
+    const zr = Math.max(z - R, 0);
+    const tg = (vz + Math.sqrt(vz * vz + 2 * G * zr)) / G;
+    segs.push({ t0: t, x, y, z, vx, vy, vz, dur: tg });
+    x += vx * tg; y += vy * tg; z = R; t += tg;
+    const vzl = vz - G * tg;
+    events.push({ t, type: "bounce", i, x, y, vz2: -vzl * BZ });
+    vz = -vzl * BZ; vx *= BXY; vy *= BXY;
+    if (vz < 1.2) break;
+  }
+  segs.push({ t0: t, x, y, z: R, vx, vy, vz: 0, dur: 1e9, roll: true });
+  return { segs, events };
+}
+function posAt(path, t) {
+  let sg = path.segs[path.segs.length - 1];
+  for (const s of path.segs) if (t < s.t0 + s.dur) { sg = s; break; }
+  const d = Math.max(0, t - sg.t0);
+  if (sg.roll) { const k = 1.6, f = (1 - Math.exp(-k * d)) / k; return { x: sg.x + sg.vx * f, y: sg.y + sg.vy * f, z: R }; }
+  return { x: sg.x + sg.vx * d, y: sg.y + sg.vy * d, z: sg.z + sg.vz * d - 0.5 * G * d * d };
+}
+
+// ---------- state ----------
+const S = {
+  phase: "demo", demo: true, now: 0, score: [0, 0], serveTeam: 0, server: null, receiver: null,
+  ball: null, live: false, rally: 0, pointAt: 0, serveAt: 0, popups: [], trail: [],
+  stats: { perfect: 0, longest: 0 }, firstSwings: 0, over: false, swingCD: 0
+};
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function rightPlayer(team) { return teamOf(team).find(p => (team === 0 ? p.lane > 0 : p.lane < 0)); }
+function leftPlayer(team) { return teamOf(team).find(p => (team === 0 ? p.lane < 0 : p.lane > 0)); }
+
+function setupServe() {
+  const st = S.serveTeam, rt = 1 - st;
+  const even = S.score[st] % 2 === 0;
+  S.server = even ? rightPlayer(st) : leftPlayer(st);
+  S.receiver = even ? rightPlayer(rt) : leftPlayer(rt);
+  for (const p of players) {
+    p.x = p.lane * 4.5; p.swing = -1;
+    const back = dirOf(p.team) * -21.5;
+    if (p.team === st) p.homeY = back;
+    else p.homeY = p === S.receiver ? back : dirOf(p.team) * -8.6;
+    p.y = p.homeY; p.homeX = p.lane * 4.5;
+  }
+  S.server.x = S.server.homeX = S.server.lane * 3;
+  S.receiver.x = S.receiver.homeX = S.receiver.lane * 5;
+  S.ball = { held: true, pos: { x: 0, y: 0, z: 2 }, path: null };
+  S.live = false; S.rally = 0; S.trail = [];
+  S.phase = "serve";
+  const humanServe = S.server.human && !S.demo;
+  S.serveAt = humanServe ? Infinity : S.now + (S.demo ? 0.9 : 1.1);
+  if (humanServe) showHint("TAP TO SERVE"); else hideHint();
+  updateBoard();
+}
+
+function doServe() {
+  const p = S.server, d = dirOf(p.team);
+  S.ball.held = false;
+  S.ball.pos = { x: p.x + (p.team === 0 ? 0.9 : -0.9), y: p.y, z: 2.2 };
+  swingAnim(p);
+  const tx = -Math.sign(p.lane * (p.team === 0 ? 1 : -1)) * rand(2.5, 7.5) * (p.team === 0 ? 1 : -1);
+  // diagonal: receiver lane x is on the opposite x sign of the server
+  const txd = -Math.sign(p.x) * rand(2.5, 7.5);
+  launch(p, txd, d * rand(14, 19.5), 1.15, { serve: true });
+  S.phase = "rally"; S.live = true; hideHint();
+  void tx;
+}
+
+function launch(h, tx, ty, T, o = {}) {
+  const b = S.ball, x0 = b.pos.x, y0 = b.pos.y, z0 = clamp(b.pos.z, 0.8, 4);
+  let vx, vy, vz;
+  for (let i = 0; i < 24; i++) {
+    vx = (tx - x0) / T; vy = (ty - y0) / T; vz = (-z0 + 0.5 * G * T * T) / T;
+    if (o.net) break;
+    const tn = -y0 / vy, zn = z0 + vz * tn - 0.5 * G * tn * tn;
+    if (zn > 3.5 + (o.high ? 2.5 : 0)) break;
+    T *= 1.07;
+  }
+  if (o.net) { const tn = -y0 / vy; vz = (1.3 - z0 + 0.5 * G * tn * tn) / tn; }
+  const path = buildPath(x0, y0, z0, vx, vy, vz, !!o.net);
+  const nb = { held: false, pos: { x: x0, y: y0, z: z0 }, path, t0: S.now, team: h.team, hitter: h, hitDone: false, receiver: null,
+    out: !!o.out, net: !!o.net, serve: !!o.serve, bonus: o.bonus || 0, giveaway: !!o.giveaway, quality: o.q ?? -1, processed: 0, dead: false };
+  const b1 = path.events.find(e => e.type === "bounce");
+  if (!o.out && !o.net && b1) {
+    const ta = clamp(0.8 * b1.vz2 / G, 0.16, 0.9 * 2 * b1.vz2 / G);
+    nb.tHitRel = b1.t + ta;
+    nb.hitPos = posAt(path, nb.tHitRel);
+    const rt = 1 - h.team, mates = teamOf(rt);
+    const hx = nb.hitPos.x;
+    let r;
+    if (rt === 0) r = hx > -1.2 ? you : partner; else r = hx < 0 ? dink : lob;
+    if (o.serve) r = S.receiver;
+    nb.receiver = r;
+    const side = r.team === 0 ? 1 : -1;
+    r.spot = { x: hx - side * 1.15, y: nb.hitPos.y - dirOf(r.team) * 0.9 };
+    void mates;
+  }
+  S.ball = nb;
+  sfx("pop", o.q);
+}
+
+function swingAnim(p) { p.swing = 0; }
+
+function advanceTeam(team) { for (const p of teamOf(team)) p.homeY = dirOf(team) * -8.6; }
+
+function aiHit(p) {
+  const b = S.ball; b.hitDone = true; swingAnim(p); S.rally++;
+  if (b.hitter && !b.serve) advanceTeam(p.team);
+  if (S.rally >= 2) advanceTeam(p.team);
+  const d = dirOf(p.team);
+  let err = (p.team === 0 ? 0.045 : 0.06) + S.rally * 0.011 + b.bonus;
+  if (S.demo) err = 0.05 + S.rally * 0.025;
+  if (S.rally <= 1) err *= 0.4; // returns of serve rarely miss
+  const dist = Math.hypot(p.x - p.spot.x, p.y - p.spot.y);
+  if (dist > 3.5) err += 0.6;
+  if (Math.random() < err) {
+    const k = Math.random();
+    if (k < 0.45) launch(p, rand(-6, 6), d * rand(3, 6), 0.8, { net: true });
+    else if (k < 0.92) {
+      if (Math.random() < 0.5) launch(p, pick([-1, 1]) * rand(11, 13), d * rand(8, 18), 0.95, { out: true });
+      else launch(p, rand(-7, 7), d * rand(23.5, 26), 0.95, { out: true });
+    } else { b.whiff = true; p.swing = 0; }
+    return;
+  }
+  const bothUp = S.rally >= 3;
+  // where to aim: bots favour the human
+  let tx;
+  if (p.team === 1) tx = Math.random() < 0.62 ? rand(1, 8.5) : rand(-8.5, -1);
+  else tx = rand(-8.5, 8.5);
+  if (b.giveaway) { launch(p, tx, d * rand(10, 15), 0.66, { q: 3 }); popup(p, "SMASH", COL.bot); return; }
+  if (S.rally <= 1) { launch(p, tx, d * rand(14, 19), 1.0, {}); return; } // return of serve: deep
+  if (bothUp ? Math.random() < 0.55 : Math.random() < 0.45) launch(p, tx, d * rand(2.8, 6), bothUp ? 1.05 : 1.2, { high: false });
+  else launch(p, tx, d * rand(11, 18), bothUp ? 0.82 : 0.9, {});
+}
+
+function humanSwing() {
+  if (S.demo || S.over) return;
+  if (S.phase === "serve" && S.server === you && S.ball.held) { doServe(); return; }
+  if (S.now < S.swingCD) return;
+  const b = S.ball;
+  if (S.phase === "rally" && S.live && b && b.receiver === you && !b.hitDone) {
+    const e = (S.now - b.t0) - b.tHitRel;
+    if (e < -WIN_EARLY) { you.swing = 0; popup(you, "TOO EARLY", "#ffb4a8"); S.swingCD = S.now + 0.25; sfx("whoosh"); return; }
+    if (e <= WIN_LATE) { humanHit(e); return; }
+  }
+  if (you.swing < 0) { you.swing = 0; sfx("whoosh"); if (b && b.receiver === partner && !b.hitDone && Math.random() < 0.4) popup(you, "PARTNER'S BALL", COL.khaki); }
+}
+
+function humanHit(e) {
+  const b = S.ball; b.hitDone = true; swingAnim(you); S.rally++; hideHint();
+  S.firstSwings++;
+  if (S.rally >= 2) advanceTeam(0);
+  const ae = Math.abs(e), d = 1;
+  const opps = teamOf(1), oppX = (opps[0].x + opps[1].x) / 2;
+  const aim = clamp(e / 0.24, -1, 1); // early → crosscourt (left)
+  const bothUp = S.rally >= 3;
+  if (ae <= PERFECT) {
+    S.stats.perfect++;
+    popup(you, "PERFECT!", COL.ball);
+    const tx = (oppX > 0 ? -1 : 1) * rand(7, 9);
+    launch(you, tx, d * (bothUp ? rand(9, 13) : rand(15, 19.5)), 0.66, { q: 3, bonus: 0.42 });
+  } else if (ae <= 0.15) {
+    popup(you, "NICE", COL.cream);
+    const tx = clamp(aim * 7 + rand(-2, 2), -8.5, 8.5);
+    if (bothUp && Math.random() < 0.5) launch(you, tx, d * rand(3, 6), 1.05, { q: 2, bonus: 0.12 });
+    else launch(you, tx, d * rand(12, 18), 0.88, { q: 2, bonus: 0.14 });
+  } else if (ae <= 0.24) {
+    popup(you, e < 0 ? "EARLY" : "LATE", "#ffd9a0");
+    launch(you, clamp(aim * 8, -8.5, 8.5), d * rand(10, 15), 1.35, { q: 1, giveaway: true, high: true });
+  } else {
+    popup(you, e < 0 ? "WAY EARLY" : "WAY LATE", "#ffb4a8");
+    if (Math.random() < 0.5) launch(you, rand(-5, 5), d * rand(3, 6), 0.8, { net: true, q: 0 });
+    else launch(you, (aim < 0 ? -1 : 1) * rand(11.5, 14), d * rand(12, 20), 0.9, { out: true, q: 0 });
+  }
+}
+
+const CAPS = {
+  humanNet: ["Into the net. Even AI can't fix that.", "Net. The AI has logged this for your annual review."],
+  partnerNet: ["Your auto-partner hit the net. It's \"still learning.\"", "Auto-Partner netted it. Refunds are not available."],
+  humanOut: ["OUT. The AI line judge is 51% sure. No replays.", "Long. The AI says it was out. The AI is always sure."],
+  partnerOut: ["Auto-Partner hit it out. It blames a software update.", "Out. Your AI partner has been sent to retraining."],
+  botErr: ["OUT! The robots blame their training data.", "Into the net. DINK-9000 is rebooting.", "The robot missed. Please do not tell the shareholders."],
+  botErrPerfect: ["PERFECT shot. Our AI will be taking credit for that.", "Clean winner. Your DUPR went up 0.01 (simulated).", "The robots could not handle it. Neither could their servers."],
+  humanMiss: ["Missed it. Would you like the AI to play for you? It mostly is.", "Whiff. Your knees thank you for not moving them."],
+  partnerMiss: ["Auto-Partner missed. It was busy generating a podcast.", "Your AI partner froze. Have you tried turning it off and on again?"],
+  botWin: ["Point robots. They have been trained on every dink ever hit.", "The robots win the rally. Resistance is optional."],
+  botMiss: ["Winner! LOB-E has stopped responding.", "Too good. DINK-9000 is asking ChatPB for help."]
+};
+
+function endPoint(winner, reason) {
+  if (!S.live) return;
+  S.live = false;
+  const b = S.ball, hitter = b.hitter;
+  S.stats.longest = Math.max(S.stats.longest, S.rally);
+  let cap = "";
+  if (reason === "net" || reason === "out") {
+    if (hitter === you) cap = pick(reason === "net" ? CAPS.humanNet : CAPS.humanOut);
+    else if (hitter === partner) cap = pick(reason === "net" ? CAPS.partnerNet : CAPS.partnerOut);
+    else cap = pick(CAPS.botErr);
+    if (hitter.team === 1) {
+      const prev = S.lastHumanQ;
+      if (prev === 3) cap = pick(CAPS.botErrPerfect);
+    }
+    if (reason === "out") callOut(b.pos);
+  } else if (reason === "miss") {
+    const r = b.receiver;
+    if (r === you) { cap = pick(CAPS.humanMiss); popup(you, "MISSED", "#ffb4a8"); }
+    else if (r === partner) cap = pick(CAPS.partnerMiss);
+    else cap = b.quality === 3 ? pick(CAPS.botErrPerfect) : pick(CAPS.botMiss);
+  }
+  if (!S.demo) {
+    S.score[winner]++;
+    setCaption(winner === 0 ? "Point, you" : "Point, robots", cap);
+    sfx(winner === 0 ? "win" : "lose");
+  }
+  S.serveTeam = winner;
+  S.pointAt = S.now + (S.demo ? 1.3 : 2.1);
+  S.phase = "point";
+  updateBoard();
+  const [a, c] = S.score;
+  if (!S.demo && (a >= WIN_PTS || c >= WIN_PTS) && Math.abs(a - c) >= 2) { S.over = true; }
+}
+
+function callOut(pos) { S.popups.push({ world: { x: pos.x, y: pos.y, z: 1.5 }, text: "OUT", color: "#ff8a7a", t: S.now, big: true }); }
+function popup(p, text, color) { S.popups.push({ world: { x: p.x, y: p.y, z: 7.2 }, text, color, t: S.now }); }
+
+// ---------- update ----------
+function update(dt) {
+  S.now += dt;
+  const b = S.ball;
+  // ball
+  if (b) {
+    if (b.held && S.server) {
+      const p = S.server;
+      b.pos = { x: p.x + (p.team === 0 ? 1.0 : -1.0), y: p.y, z: 2.4 + Math.abs(Math.sin(S.now * 3)) * 1.2 };
+      if (S.phase === "serve" && S.now >= S.serveAt) doServe();
+    } else if (b.path) {
+      const t = S.now - b.t0;
+      b.pos = posAt(b.path, t);
+      b.pos.y = clamp(b.pos.y, -29, 33); b.pos.x = clamp(b.pos.x, -40, 40);
+      // events
+      while (b.processed < b.path.events.length && b.path.events[b.processed].t <= t) {
+        const ev = b.path.events[b.processed++];
+        if (ev.type === "net") { sfx("net"); endPoint(1 - b.team, "net"); }
+        else if (ev.type === "bounce") {
+          if (ev.i < 3) sfx("bounce", ev.i);
+          if (ev.i === 0 && S.live) {
+            const d = dirOf(b.team), inX = Math.abs(ev.x) <= 10.15;
+            const inY = d > 0 ? ev.y > 0 && ev.y <= 22.15 : ev.y < 0 && ev.y >= -22.15;
+            const kitchenOk = !b.serve || Math.abs(ev.y) > 7;
+            if (!(inX && inY && kitchenOk)) endPoint(1 - b.team, "out");
+          } else if (ev.i === 1 && S.live && !b.hitDone) {
+            endPoint(b.team, "miss");
+          } else if (ev.i === 1 && S.live && b.whiff) endPoint(b.team, "miss");
+        }
+      }
+      // AI hits
+      if (S.live && b.receiver && !b.hitDone && t >= b.tHitRel) {
+        if (!b.receiver.human || S.demo) aiHit(b.receiver);
+      }
+      if (S.live && b.receiver === you && !b.hitDone && !S.demo && t > b.tHitRel + WIN_LATE && !b.lateFlag) {
+        b.lateFlag = true; // ball passes; second bounce ends point
+      }
+      // timing hint for first rallies
+      if (S.live && b.receiver === you && !b.hitDone && !S.demo && S.firstSwings < 3) {
+        const e = t - b.tHitRel;
+        if (e > -0.9 && e < WIN_LATE) showHint(Math.abs(e) <= PERFECT + 0.03 ? "SWING NOW!" : "TAP WHEN THE RING CLOSES");
+      }
+    }
+    if (b.hitter && b.quality >= 0 && b.hitter === you) S.lastHumanQ = b.quality;
+    else if (b.hitter && b.hitter.team === 0) S.lastHumanQ = -1;
+    // trail
+    S.trail.push({ x: b.pos.x, y: b.pos.y, z: b.pos.z });
+    if (S.trail.length > 7) S.trail.shift();
+  }
+  // players
+  for (const p of players) {
+    let tx = p.homeX, ty = p.homeY;
+    if (S.live && b && b.receiver === p && !b.hitDone && p.spot) { tx = p.spot.x; ty = p.spot.y; }
+    else if (S.phase === "rally" || S.phase === "point") {
+      // shade toward the ball laterally
+      tx = p.homeX + clamp((b ? b.pos.x : 0) * 0.25, -2.5, 2.5);
+    }
+    if (S.phase === "serve") { tx = p.homeX; ty = p.homeY; }
+    const dx = tx - p.x, dy = ty - p.y, dist = Math.hypot(dx, dy);
+    const sp = (p.human ? 26 : 20) * dt;
+    if (dist > 0.05) { const k = Math.min(1, sp / dist); p.x += dx * k; p.y += dy * k; p.moving = dist > 0.3; if (p.moving) p.walk += dt * 14; }
+    else p.moving = 0;
+    if (p.swing >= 0) { p.swing += dt / 0.36; if (p.swing >= 1) p.swing = -1; }
+  }
+  // point flow
+  if (S.phase === "point" && S.now >= S.pointAt) {
+    if (S.over) { showOver(); S.phase = "done"; }
+    else { setupServe(); if (!S.demo) setCaption("", ""); }
+  }
+  S.popups = S.popups.filter(p => S.now - p.t < 1.2);
+}
+
+// ---------- render ----------
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(bg, 0, 0);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const b = S.ball;
+  // ball shadow
+  if (b) {
+    const sh = proj(b.pos.x, b.pos.y, 0);
+    if (sh.s > 0)    { ctx.fillStyle = "rgba(10,14,30,0.35)";
+    ctx.beginPath(); ctx.ellipse(sh.x, sh.y, R * 1.3 * sh.s, R * 0.5 * sh.s, 0, 0, Math.PI * 2); ctx.fill(); }
+  }
+  const items = players.map(p => ({ y: p.y, draw: () => drawPlayer(p) }));
+  items.push({ y: 0, draw: () => drawNet(ctx, 0, true) });
+  if (b) items.push({ y: b.pos.y - 0.01, draw: drawBall });
+  items.sort((a, c) => c.y - a.y);
+  for (const it of items) it.draw();
+  // popups
+  for (const pp of S.popups) {
+    const age = (S.now - pp.t) / 1.2, q = proj(pp.world.x, pp.world.y, pp.world.z + age * 2.2);
+    const size = pp.big ? Math.max(22, 1.6 * q.s) : Math.max(18, Math.min(34, 1.25 * q.s));
+    ctx.globalAlpha = 1 - age * age;
+    ctx.font = `800 ${size}px "Barlow Condensed", sans-serif`; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.lineWidth = Math.max(3, size * 0.16); ctx.strokeStyle = "rgba(14,21,32,0.9)"; ctx.strokeText(pp.text, q.x, q.y);
+    ctx.fillStyle = pp.color; ctx.fillText(pp.text, q.x, q.y);
+    ctx.globalAlpha = 1; ctx.textAlign = "left";
+  }
+}
+function drawBall() {
+  const b = S.ball, q = proj(b.pos.x, b.pos.y, b.pos.z);
+  if (q.s <= 0) return;
+  const r = Math.max(3, R * q.s);
+  // trail
+  if (!b.held && S.trail.length > 1) {
+    for (let i = 0; i < S.trail.length - 1; i++) {
+      const t = S.trail[i], tq = proj(t.x, t.y, t.z);
+      ctx.fillStyle = `rgba(220,239,60,${0.06 + 0.05 * i})`;
+      ctx.beginPath(); ctx.arc(tq.x, tq.y, r * (0.4 + i * 0.08), 0, Math.PI * 2); ctx.fill();
+    }
+  }
+  const gr = ctx.createRadialGradient(q.x - r * 0.35, q.y - r * 0.35, r * 0.1, q.x, q.y, r);
+  gr.addColorStop(0, "#f6ff9a"); gr.addColorStop(1, "#b6cc1c");
+  ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(q.x, q.y, r, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "rgba(90,100,10,0.55)";
+  for (const [ox, oy] of [[-0.3, 0.1], [0.25, -0.25], [0.2, 0.35]]) { ctx.beginPath(); ctx.arc(q.x + ox * r, q.y + oy * r, r * 0.13, 0, Math.PI * 2); ctx.fill(); }
+  // timing ring for the human
+  if (!S.demo && S.live && b.receiver === you && !b.hitDone && b.tHitRel != null) {
+    const e = (S.now - b.t0) - b.tHitRel;
+    if (e > -1.1 && e < WIN_LATE) {
+      const rr = r * (1.7 + Math.max(0, -e) * 7);
+      const good = Math.abs(e) <= PERFECT, inWin = e >= -WIN_EARLY;
+      ctx.lineWidth = good ? 4 : 2.5;
+      ctx.strokeStyle = good ? COL.ball : inWin ? "rgba(243,244,220,0.95)" : "rgba(243,244,220,0.45)";
+      ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, Math.PI * 2); ctx.stroke();
+      ctx.lineWidth = 1.5; ctx.strokeStyle = "rgba(220,239,60,0.6)";
+      ctx.beginPath(); ctx.arc(q.x, q.y, r * 1.7, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+}
+
+// ---------- UI ----------
+function updateBoard() {
+  $("s0").textContent = S.score[0]; $("s1").textContent = S.score[1];
+  $("dot0").classList.toggle("on", S.serveTeam === 0); $("dot1").classList.toggle("on", S.serveTeam === 1);
+}
+let capTimer = 0;
+function setCaption(tag, text) {
+  const el = $("caption");
+  clearTimeout(capTimer);
+  if (!text) { el.innerHTML = ""; return; }
+  el.innerHTML = (tag ? `<span class="tag">${tag}</span>` : "") + text;
+  capTimer = setTimeout(() => { el.innerHTML = ""; }, 3200);
+}
+function showHint(t) { const h = $("hint"); if (h.textContent !== t) h.textContent = t; h.hidden = false; }
+function hideHint() { $("hint").hidden = true; }
+
+function dupr() {
+  const [a, c] = S.score;
+  return clamp(2.1 + a * 0.32 - c * 0.08 + S.stats.perfect * 0.07 + Math.random() * 0.2, 1.5, 7.9).toFixed(2);
+}
+function showOver() {
+  const won = S.score[0] > S.score[1];
+  $("overpill").textContent = won ? "Final · You win" : "Final · Robots win";
+  $("overh").textContent = won ? "You beat the robots" : "The robots win";
+  $("overp").textContent = won ? "DINK-9000 and LOB-E have filed an appeal with the AI line judge." : "They'd like to thank their training data. And you, for being it.";
+  $("st-score").textContent = `${S.score[0]}–${S.score[1]}`;
+  $("st-dupr").textContent = dupr();
+  $("st-perfect").textContent = S.stats.perfect;
+  $("st-rally").textContent = `${S.stats.longest} hits`;
+  $("over").hidden = false; $("board").hidden = true; hideHint(); setCaption("", "");
+  $("again").focus();
+}
+
+function startDemo() {
+  S.demo = true; S.over = false; S.score = [0, 0]; S.serveTeam = 0;
+  setupServe();
+}
+function startGame() {
+  S.demo = false; S.over = false; S.score = [0, 0]; S.serveTeam = 0;
+  S.stats = { perfect: 0, longest: 0 }; S.firstSwings = 0;
+  $("board").hidden = false; $("over").hidden = true;
+  setupServe();
+  setCaption("Rally scoring · first to 7", "The AI found the old scoring rules confusing. You serve first.");
+}
+
+const LOAD_MSGS = [
+  "Training neural net on 40,000 hours of dinking…",
+  "Downloading your 4.0 rating… 3.2 installed.",
+  "Teaching the AI to argue line calls…",
+  "Removing the need for knees…",
+  "Kitchen optimized. Kitchen is still non-volley.",
+  "Ready. You're welcome."
+];
+function boot() {
+  initAudio();
+  $("title").hidden = true; $("loading").hidden = false;
+  let i = 0;
+  const step = () => {
+    $("loadmsg").textContent = LOAD_MSGS[i];
+    $("bar").style.width = `${Math.round((i + 1) / LOAD_MSGS.length * 100)}%`;
+    i++;
+    if (i < LOAD_MSGS.length) loadTimer = setTimeout(step, 520);
+    else loadTimer = setTimeout(() => { $("loading").hidden = true; startGame(); }, 650);
+  };
+  step();
+}
+let loadTimer = 0;
+$("loading").addEventListener("pointerdown", () => { clearTimeout(loadTimer); $("loading").hidden = true; startGame(); });
+$("play").addEventListener("click", boot);
+$("again").addEventListener("click", () => { initAudio(); startGame(); });
+
+// input
+C.addEventListener("pointerdown", e => { e.preventDefault(); initAudio(); humanSwing(); });
+window.addEventListener("keydown", e => {
+  if (e.code === "Space" || e.code === "Enter" || e.code === "KeyJ" || e.code === "KeyF") {
+    const overlayOpen = !$("title").hidden || !$("over").hidden || !$("loading").hidden;
+    if (overlayOpen) return;
+    e.preventDefault(); if (!e.repeat) humanSwing();
+  }
+});
+
+// ---------- audio ----------
+let AC = null, muted = false;
+function initAudio() {
+  if (AC) { if (AC.state === "suspended") AC.resume(); return; }
+  try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { AC = null; }
+}
+function tone(freq, freq2, dur, type, vol, delay = 0) {
+  const t = AC.currentTime + delay, o = AC.createOscillator(), g = AC.createGain();
+  o.type = type; o.frequency.setValueAtTime(freq, t); o.frequency.exponentialRampToValueAtTime(freq2, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(AC.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function sfx(kind, q) {
+  if (!AC || muted || S.demo) return;
+  if (kind === "pop") { tone(q === 3 ? 980 : 760, 360, 0.07, "triangle", 0.5); tone(2400, 1200, 0.025, "square", 0.08); }
+  else if (kind === "bounce") tone(260 - (q || 0) * 30, 120, 0.07, "sine", 0.35 / ((q || 0) + 1));
+  else if (kind === "net") tone(140, 70, 0.18, "sawtooth", 0.18);
+  else if (kind === "whoosh") tone(500, 200, 0.12, "sine", 0.06);
+  else if (kind === "win") { tone(660, 660, 0.12, "triangle", 0.25); tone(990, 990, 0.18, "triangle", 0.25, 0.1); }
+  else if (kind === "lose") { tone(330, 300, 0.14, "triangle", 0.22); tone(220, 200, 0.22, "triangle", 0.22, 0.12); }
+}
+$("mute").addEventListener("click", e => {
+  e.stopPropagation(); muted = !muted; $("mute").textContent = muted ? "OFF" : "SND";
+  $("mute").setAttribute("aria-label", muted ? "Unmute sound" : "Mute sound");
+});
+
+// ---------- loop ----------
+let last = performance.now();
+function frame(ts) {
+  const dt = Math.min(0.05, Math.max(0, (ts - last) / 1000)) * SPEED; last = ts;
+  requestAnimationFrame(frame);
+  try { update(dt); render(); } catch (err) { console.error(err); }
+}
+window.addEventListener("resize", resize);
+logo.onload = () => resize();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(resize);
+resize();
+startDemo();
+requestAnimationFrame(frame);
+window.__pb = S;
+})();
+</script>
+
+</body>
+</html>
